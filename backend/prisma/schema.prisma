@@ -1,0 +1,95 @@
+// OpenMessaging veritabanı şeması — PostgreSQL + Prisma
+// Migration: npx prisma migrate dev --name init
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum MessageStatus {
+  SENT      // Gönderildi (sunucuya ulaştı)
+  DELIVERED // İletildi (karşı tarafın cihazına ulaştı)
+  READ      // Okundu
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  passwordHash String?
+  verified     Boolean  @default(false)
+  username     String?  @unique
+  // Kullanıcı Kodu (örn. K83M2P). E-posta doğrulandıktan sonra profil
+  // tamamlanırken atanır; bu yüzden profil oluşana kadar NULL olabilir.
+  userTag      String?  @unique
+  avatarUrl    String?
+  displayName  String?
+  lastSeen     DateTime @default(now())
+  createdAt    DateTime @default(now())
+
+  sentMessages Message[] @relation("SentBy")
+  contacts     Contact[] @relation("ContactHolder")
+  inContacts   Contact[] @relation("Contacted")
+
+  @@index([userTag])
+}
+
+/// 6 haneli e-posta doğrulama kodu (OTP) kaydı.
+/// Kodu düz metin saklamayız; HMAC-SHA256(salt, code) olarak tutarız.
+model OtpAttempt {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  codeHash  String
+  salt      String
+  attempts  Int      @default(0)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+model Contact {
+  id        String   @id @default(cuid())
+  holder    User     @relation("ContactHolder", fields: [holderId], references: [id], onDelete: Cascade)
+  holderId  String
+  contact   User     @relation("Contacted", fields: [contactId], references: [id], onDelete: Cascade)
+  contactId String
+  createdAt DateTime @default(now())
+
+  @@unique([holderId, contactId])
+  @@index([contactId])
+}
+
+model Conversation {
+  id            String    @id @default(cuid())
+  // Normalize edilmiş çift: participantA < participantB (string compare)
+  participantA  String
+  participantB  String
+  lastMessageAt DateTime  @default(now())
+  lastMessage   String?   @db.VarChar(1024)
+  lastSenderId  String?
+  messages      Message[]
+
+  @@unique([participantA, participantB])
+  @@index([participantA])
+  @@index([participantB])
+}
+
+model Message {
+  id             String        @id @default(cuid())
+  conversationId String
+  conversation   Conversation  @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender         User          @relation("SentBy", fields: [senderId], references: [id], onDelete: Cascade)
+  senderId       String
+  content        String        @db.VarChar(4096)
+  status         MessageStatus @default(SENT)
+  createdAt      DateTime      @default(now())
+  deliveredAt    DateTime?
+  readAt         DateTime?
+
+  @@index([conversationId, createdAt])
+  @@index([senderId])
+}
